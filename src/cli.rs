@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use amber_store_core::key::Key;
+use dstore_client::human_bytes;
 use jj_cli::cli_util::{CliRunner, CommandHelper, WorkspaceCommandHelper};
 use jj_cli::command_error::{CommandError, internal_error, user_error};
 use jj_cli::ui::Ui;
@@ -19,7 +20,8 @@ use jj_lib::workspace::{Workspace, WorkspaceInitError};
 
 use crate::backend::{AmberBackend, BACKEND_NAME};
 use crate::bookmarks::{self, PushSelection};
-use crate::dstore::{self, Remote, Remotes, Session};
+use crate::dstore::{self, Moved, Remote, Remotes, Session};
+use crate::progress::Meter;
 
 #[derive(clap::Parser, Clone, Debug)]
 enum AjjCommand {
@@ -341,23 +343,32 @@ async fn fetch_remote(
     track_new: bool,
 ) -> Result<(), CommandError> {
     let store = Arc::clone(backend(ws)?.store());
+    let meter = Meter::new(ui);
     let rt = runtime()?;
-    let (branches, other) = rt
-        .block_on(async {
-            let session = Session::dial(remote).await?;
-            let result = async {
-                let (branches, other) = dstore::list_branches(&session.cluster, &remote.ref_prefix()).await?;
-                for b in &branches {
-                    dstore::fetch(&session.cluster, &store, b.key).await?;
-                }
-                Ok::<_, dstore::Error>((branches, other))
+    let result = rt.block_on(async {
+        meter.phase("Connecting to dstore");
+        let session = Session::dial(remote).await?;
+        let result = async {
+            meter.phase(format!("Listing {}", remote.ref_prefix()));
+            let (branches, other) = dstore::list_branches(&session.cluster, &remote.ref_prefix()).await?;
+            let mut moved = Moved::default();
+            for b in &branches {
+                meter.phase(format!("Fetching {}", remote.ref_name(&b.bookmark)));
+                moved += dstore::fetch(&session.cluster, &store, b.key, meter.callback()).await?;
             }
-            .await;
-            session.close().await;
-            result
-        })
-        .map_err(map_dstore)?;
+            Ok::<_, dstore::Error>((branches, other, moved))
+        }
+        .await;
+        meter.phase("Disconnecting");
+        session.close().await;
+        result
+    });
+    meter.clear();
     drop(rt);
+    let (branches, other, moved) = result.map_err(map_dstore)?;
+    if moved.objects > 0 {
+        writeln!(ui.status(), "Fetched {} objects ({}).", moved.objects, human_bytes(moved.bytes))?;
+    }
 
     for name in &other {
         writeln!(ui.warning_default(), "Skipping dstore reference {name}: it does not name a commit")?;
@@ -453,34 +464,53 @@ async fn cmd_push(ui: &mut Ui, command: &CommandHelper, args: &PushArgs) -> Resu
 
     let settings = ws.settings();
     let user = dstore::ref_user(settings.user_name(), settings.user_email());
+    let meter = Meter::new(ui);
     let rt = runtime()?;
-    let results: Vec<Result<(), dstore::Error>> = rt
-        .block_on(async {
-            let session = Session::dial(&remote).await?;
-            let mut results = Vec::new();
-            for (_, ref_name, before, after) in &plan {
-                let r = match (before, after) {
-                    (_, Some(a)) => {
-                        dstore::put_branch(&session.cluster, &store, ref_name, *a, *before, &user)
-                            .await
-                            .map(|_| ())
-                    }
-                    (Some(b), None) => dstore::delete_branch(&session.cluster, ref_name, *b).await,
-                    (None, None) => Ok(()),
-                };
-                results.push(r);
-            }
-            session.close().await;
-            Ok::<_, dstore::Error>(results)
-        })
-        .map_err(map_dstore)?;
+    let results = rt.block_on(async {
+        meter.phase("Connecting to dstore");
+        let session = Session::dial(&remote).await?;
+        let mut results = Vec::new();
+        for (_, ref_name, before, after) in &plan {
+            let r = match (before, after) {
+                (_, Some(a)) => {
+                    meter.phase(format!("Pushing {ref_name}"));
+                    dstore::put_branch(
+                        &session.cluster,
+                        &store,
+                        ref_name,
+                        *a,
+                        *before,
+                        &user,
+                        meter.callback(),
+                    )
+                    .await
+                }
+                (Some(b), None) => {
+                    meter.phase(format!("Deleting {ref_name}"));
+                    dstore::delete_branch(&session.cluster, ref_name, *b).await.map(|()| Moved::default())
+                }
+                (None, None) => Ok(Moved::default()),
+            };
+            results.push(r);
+        }
+        meter.phase("Disconnecting");
+        session.close().await;
+        Ok::<_, dstore::Error>(results)
+    });
+    meter.clear();
     drop(rt);
+    let results = results.map_err(map_dstore)?;
+    let mut moved = Moved::default();
+    for m in results.iter().flatten() {
+        moved += *m;
+    }
+    writeln!(ui.status(), "Uploaded {} objects ({}).", moved.objects, human_bytes(moved.bytes))?;
 
     let mut tx = ws.start_transaction();
     let mut first_err = None;
     for ((u, _, _, _), r) in plan.iter().zip(results) {
         match r {
-            Ok(()) => bookmarks::record_pushed(tx.repo_mut(), &remote_name, u),
+            Ok(_) => bookmarks::record_pushed(tx.repo_mut(), &remote_name, u),
             Err(e) => {
                 writeln!(ui.warning_default(), "Failed to push {}: {e}", u.name.as_symbol())?;
                 first_err.get_or_insert(e);

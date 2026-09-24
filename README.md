@@ -41,6 +41,11 @@ bookmarks map to top-level references.
 The network flags `--relay URL`, `--no-relay` and `--no-discovery` are stored with the remote and
 mean what they mean to `dstore`. The remotes are kept in `.jj/repo/store/amber/remotes.json`.
 
+**Progress.** While a fetch or push runs, a status line shows the phase and the counts (`Pushing
+myrepo/main: 508/1031 objects, 24.3 MiB/38.2 MiB (64%), 21.0 MiB/s`) where jj shows its own progress:
+on a terminal, unless `--quiet` or `ui.progress-indicator = false`. Afterwards the command prints what
+it moved, `Uploaded N objects (…)` or `Fetched N objects (…)`, on a terminal or not.
+
 **Tickets** are resolved the way dstore's working copies resolve them:
 - `clone` and `remote add` take `--ticket`, or `$DSTORE_TICKET` when the flag is absent, and store
   it with the remote.
