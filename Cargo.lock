@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "ajj"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "amber-store-core",
  "async-trait",
