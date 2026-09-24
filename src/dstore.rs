@@ -1,7 +1,8 @@
 //! Talking to a dstore cluster: remotes, dialing, listing branches, moving commits and references.
 //!
 //! A **remote** is a dstore cluster (its ticket) plus a reference-name prefix. The jj bookmark `B`
-//! on remote `R` is the dstore reference `<prefix of R>B`, and a reference is a branch when its key is
+//! on remote `R` is the dstore reference `<prefix of R>/B` (just `B` without a prefix), and a
+//! reference is a branch when its key is
 //! a commit key. This module knows nothing about jj's view; [`crate::cli`] maps these operations onto
 //! remote-tracking bookmarks.
 
@@ -38,7 +39,8 @@ pub enum Error {
 pub struct Remote {
     /// A `dstore1…` ticket, or node ids; empty to take `$DSTORE_TICKET` at each use.
     pub ticket: String,
-    /// Prepended to a bookmark name to form the reference name, e.g. `myrepo/`.
+    /// The directory of the repository's references, e.g. `myrepo` for `myrepo/main`; empty for
+    /// references at the top level. A trailing `/` is ignored.
     #[serde(default)]
     pub prefix: String,
     /// A custom relay URL; empty for iroh's default relays.
@@ -54,9 +56,20 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A prefix as stored: without trailing separators, which [`Remote::ref_prefix`] adds.
+pub fn normalize_prefix(prefix: &str) -> String {
+    prefix.trim_end_matches('/').to_owned()
+}
+
 impl Remote {
+    /// What precedes a bookmark name in a reference name: `<prefix>/`, or nothing.
+    pub fn ref_prefix(&self) -> String {
+        let p = normalize_prefix(&self.prefix);
+        if p.is_empty() { p } else { p + "/" }
+    }
+
     pub fn ref_name(&self, bookmark: &str) -> String {
-        format!("{}{}", self.prefix, bookmark)
+        self.ref_prefix() + bookmark
     }
 
     /// The remote as one run uses it: `ticket` given for the run, else the stored ticket, else
@@ -83,7 +96,7 @@ impl Remote {
         if !self.ticket.is_empty() {
             dstore_ticket::parse(self.ticket.as_bytes()).map_err(|e| Error::Msg(e.to_string()))?;
         }
-        if !self.prefix.is_empty() {
+        if !self.ref_prefix().is_empty() {
             dstore_client::validate_name_bytes(self.ref_name("x").as_bytes())
                 .map_err(|e| Error::Msg(format!("prefix {:?}: {e}", self.prefix)))?;
         }
@@ -200,7 +213,7 @@ pub struct RemoteRef {
     pub key: Key,
 }
 
-/// Lists the references under `prefix`. Those naming commits are branches; the names of the others
+/// Lists the references whose names start with `prefix` ([`Remote::ref_prefix`]). Those naming commits are branches; the names of the others
 /// (trees pushed by `dstore push` without a branch) come back separately.
 pub async fn list_branches(cl: &Cluster, prefix: &str) -> Result<(Vec<RemoteRef>, Vec<String>), Error> {
     let ctx = Ctx::background();
@@ -297,22 +310,35 @@ mod tests {
 
     #[test]
     fn a_run_ticket_overrides_the_stored_one() {
-        let stored = Remote { ticket: T1.into(), prefix: "p/".into(), ..Remote::default() };
+        let stored = Remote { ticket: T1.into(), prefix: "p".into(), ..Remote::default() };
         assert_eq!(stored.for_run(None).unwrap().ticket, T1);
         let run = stored.for_run(Some(T2)).unwrap();
         assert_eq!(run.ticket, T2);
-        assert_eq!(run.prefix, "p/");
+        assert_eq!(run.prefix, "p");
         assert!(stored.for_run(Some("not a ticket")).is_err());
     }
 
     #[test]
     fn a_remote_may_store_no_ticket() {
-        let r = Remote { prefix: "p/".into(), ..Remote::default() };
+        let r = Remote { prefix: "p".into(), ..Remote::default() };
         r.validate().unwrap();
         assert_eq!(r.for_run(Some(T1)).unwrap().ticket, T1);
         let json =
             serde_json::to_string(&Remotes { remotes: [("origin".into(), r.clone())].into() }).unwrap();
         let back: Remotes = serde_json::from_str(&json).unwrap();
         assert_eq!(back.remotes["origin"], r);
+    }
+
+    #[test]
+    fn the_prefix_is_a_directory() {
+        let at = |prefix: &str| Remote { prefix: prefix.into(), ..Remote::default() };
+        assert_eq!(at("myrepo").ref_name("main"), "myrepo/main");
+        assert_eq!(at("myrepo/").ref_name("main"), "myrepo/main");
+        assert_eq!(at("myrepo//").ref_name("main"), "myrepo/main");
+        assert_eq!(at("team/myrepo").ref_name("main"), "team/myrepo/main");
+        assert_eq!(at("").ref_name("main"), "main");
+        assert_eq!(at("myrepo").ref_prefix(), "myrepo/");
+        assert_eq!(at("").ref_prefix(), "");
+        assert_eq!(normalize_prefix("myrepo/"), "myrepo");
     }
 }

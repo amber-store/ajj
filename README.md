@@ -5,14 +5,14 @@
 [dstore](https://github.com/amber-store/dstore) cluster:
 
 - A jj commit is an amber `Commit` object (CAS type 5), and its commit id is the amber key.
-- The bookmark `main` on a remote is the dstore reference `<prefix>main`, holding that key.
+- The bookmark `main` on a remote is the dstore reference `<prefix>/main`, holding that key.
 
 Everything else is jj 0.45.1, unchanged: `ajj log`, `ajj new`, `ajj rebase`, `ajj bookmark`,
 `ajj op log` and so on.
 
 ```sh
 export DSTORE_TICKET=dstore1…                        # or --ticket, as for dstore
-ajj dstore clone myrepo --prefix myrepo/            # fetch every branch under myrepo/, check out main
+ajj dstore clone myrepo --prefix myrepo             # fetch every branch under myrepo/, check out main
 cd myrepo
 echo hi > hello.txt && ajj commit -m hello
 ajj bookmark move main --to @-
@@ -33,6 +33,10 @@ that `ajj dstore fetch` imports.
 | `ajj dstore remote remove NAME`, `ajj dstore remote list` | Remove or list remotes. |
 | `ajj dstore fetch [--remote R] [--no-track] [--ticket T]` | Fetch the remote's branches and update the remote bookmarks. |
 | `ajj dstore push [--remote R] [-b NAME]… [--all] [--deleted] [--dry-run] [--ticket T]` | Move references to where the local bookmarks point. |
+
+`--prefix P` names the directory of the repository's references. The bookmark `main` is the
+reference `P/main`; the `/` is added for you, and a trailing one in `P` is ignored. Without a prefix,
+bookmarks map to top-level references.
 
 The network flags `--relay URL`, `--no-relay` and `--no-discovery` are stored with the remote and
 mean what they mean to `dstore`. The remotes are kept in `.jj/repo/store/amber/remotes.json`.

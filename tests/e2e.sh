@@ -65,8 +65,8 @@ ln -s a.txt link
 head -c 3000000 /dev/urandom >big.bin
 "$AJJ" commit -m first >/dev/null 2>&1
 # Ann's remote stores no ticket: fetch and push take $DSTORE_TICKET when they run.
-env -u DSTORE_TICKET "$AJJ" dstore remote add origin --prefix demo/ --no-relay
-if contains "$("$AJJ" dstore remote list)" 'origin $DSTORE_TICKET prefix=demo/'; then
+env -u DSTORE_TICKET "$AJJ" dstore remote add origin --prefix demo --no-relay
+if contains "$("$AJJ" dstore remote list)" 'origin $DSTORE_TICKET prefix=demo'; then
 	pass "remote without a stored ticket"
 else fail "remote without a stored ticket"; fi
 if OUT=$(env -u DSTORE_TICKET "$AJJ" dstore fetch 2>&1); then fail "no ticket anywhere is an error"; else
@@ -82,7 +82,7 @@ if contains "$REF" "$MAIN"; then pass "demo/main names the jj commit"; else fail
 # 2. Bob clones with ajj: same files, same commit, same change id.
 as Bob
 cd "$W"
-check "clone with the ticket from \$DSTORE_TICKET" "$AJJ" dstore clone bob --prefix demo/ --no-relay
+check "clone with the ticket from \$DSTORE_TICKET" "$AJJ" dstore clone bob --prefix demo/ --no-relay  # a trailing / is fine too
 if cmp -s ann/big.bin bob/big.bin && [ "$(readlink bob/link)" = a.txt ] && [ -x bob/sub/x.sh ]; then
 	pass "cloned files, symlink, exec bit"
 else fail "cloned files, symlink, exec bit"; fi

@@ -29,7 +29,7 @@ enum AjjCommand {
 
 /// Store commits in amber and share bookmarks through a dstore cluster
 ///
-/// Bookmark `B` on remote `R` is the dstore reference `<prefix of R>B`, holding the key of an amber
+/// Bookmark `B` on remote `R` is the dstore reference `<prefix of R>/B`, holding the key of an amber
 /// commit. `fetch` and `push` keep `B@R` in step with it, as `jj git fetch/push` do for git.
 #[derive(clap::Subcommand, Clone, Debug)]
 enum DstoreCommand {
@@ -43,7 +43,8 @@ enum DstoreCommand {
 
 #[derive(clap::Args, Clone, Debug)]
 struct NetArgs {
-    /// Reference-name prefix of the repository on the cluster, e.g. `myrepo/`
+    /// Directory of the repository's references on the cluster: `--prefix myrepo` maps bookmark
+    /// `main` to reference `myrepo/main`
     #[arg(long, default_value = "")]
     prefix: String,
     /// Custom iroh relay URL
@@ -61,7 +62,7 @@ impl NetArgs {
     fn remote(&self, ticket: &str) -> Remote {
         Remote {
             ticket: ticket.to_owned(),
-            prefix: self.prefix.clone(),
+            prefix: dstore::normalize_prefix(&self.prefix),
             relay: self.relay.clone(),
             no_relay: self.no_relay,
             no_discovery: self.no_discovery,
@@ -217,7 +218,7 @@ fn pick_remote(
         None if remotes.remotes.len() == 1 => remotes.remotes.keys().next().unwrap().as_str().into(),
         None if remotes.remotes.is_empty() => {
             return Err(user_error("No dstore remote is configured")
-                .hinted("Add one with `ajj dstore remote add origin --ticket <ticket> --prefix <repo>/`."));
+                .hinted("Add one with `ajj dstore remote add origin --ticket <ticket> --prefix <repo>`."));
         }
         None => return Err(user_error("Several dstore remotes are configured; pick one with --remote")),
     };
@@ -345,7 +346,7 @@ async fn fetch_remote(
         .block_on(async {
             let session = Session::dial(remote).await?;
             let result = async {
-                let (branches, other) = dstore::list_branches(&session.cluster, &remote.prefix).await?;
+                let (branches, other) = dstore::list_branches(&session.cluster, &remote.ref_prefix()).await?;
                 for b in &branches {
                     dstore::fetch(&session.cluster, &store, b.key).await?;
                 }
@@ -526,8 +527,11 @@ async fn cmd_remote(ui: &mut Ui, command: &CommandHelper, cmd: RemoteCommand) ->
         RemoteCommand::List => {
             let mut out = ui.stdout();
             for (name, r) in &remotes.remotes {
-                let prefix =
-                    if r.prefix.is_empty() { String::new() } else { format!(" prefix={}", r.prefix) };
+                let prefix = if r.prefix.is_empty() {
+                    String::new()
+                } else {
+                    format!(" prefix={}", dstore::normalize_prefix(&r.prefix))
+                };
                 let ticket = if r.ticket.is_empty() { "$DSTORE_TICKET" } else { &r.ticket };
                 writeln!(out, "{name} {ticket}{prefix}")?;
             }
