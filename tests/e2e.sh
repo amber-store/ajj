@@ -75,6 +75,8 @@ fi
 check "--ticket for one run" env -u DSTORE_TICKET "$AJJ" dstore fetch --ticket "$T"
 "$AJJ" bookmark create main -r @- >/dev/null 2>&1
 check "push a new bookmark" "$AJJ" dstore push -b main
+if grep -Eq '^Uploaded [1-9][0-9]* objects \(' "$W/last.out"; then pass "push reports what it uploaded"; else
+	fail "push reports what it uploaded"; sed 's/^/    /' "$W/last.out"; fi
 MAIN=$("$AJJ" log --no-graph -r main -T commit_id 2>/dev/null)
 REF=$("$G" ref get --no-relay demo/main 2>/dev/null || true)
 if contains "$REF" "$MAIN"; then pass "demo/main names the jj commit"; else fail "demo/main names the jj commit: $REF"; fi
@@ -83,6 +85,8 @@ if contains "$REF" "$MAIN"; then pass "demo/main names the jj commit"; else fail
 as Bob
 cd "$W"
 check "clone with the ticket from \$DSTORE_TICKET" "$AJJ" dstore clone bob --prefix demo/ --no-relay  # a trailing / is fine too
+if grep -Eq '^Fetched [1-9][0-9]* objects \(' "$W/last.out"; then pass "fetch reports what it fetched"; else
+	fail "fetch reports what it fetched"; sed 's/^/    /' "$W/last.out"; fi
 if cmp -s ann/big.bin bob/big.bin && [ "$(readlink bob/link)" = a.txt ] && [ -x bob/sub/x.sh ]; then
 	pass "cloned files, symlink, exec bit"
 else fail "cloned files, symlink, exec bit"; fi

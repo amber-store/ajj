@@ -109,12 +109,12 @@ async fn references_move_only_from_the_expected_commit() {
     let store = Arc::clone(amber(&repo).store());
 
     // Create-only, then a compare-and-swap from the right and from a wrong commit.
-    dstore::put_branch(&cl, &store, "r/main", key(a.id()), None, "ann").await.unwrap();
-    let err = dstore::put_branch(&cl, &store, "r/main", key(b.id()), None, "ann").await.unwrap_err();
+    dstore::put_branch(&cl, &store, "r/main", key(a.id()), None, "ann", None).await.unwrap();
+    let err = dstore::put_branch(&cl, &store, "r/main", key(b.id()), None, "ann", None).await.unwrap_err();
     assert!(matches!(err, Error::Changed { .. }), "{err}");
-    dstore::put_branch(&cl, &store, "r/main", key(b.id()), Some(key(a.id())), "ann").await.unwrap();
+    dstore::put_branch(&cl, &store, "r/main", key(b.id()), Some(key(a.id())), "ann", None).await.unwrap();
     // Re-pushing what is already there succeeds (an interrupted push that got that far).
-    dstore::put_branch(&cl, &store, "r/main", key(b.id()), Some(key(a.id())), "ann").await.unwrap();
+    dstore::put_branch(&cl, &store, "r/main", key(b.id()), Some(key(a.id())), "ann", None).await.unwrap();
 
     // A tree reference under the prefix is not a branch.
     let (_, tree_root) = {
@@ -135,8 +135,8 @@ async fn references_move_only_from_the_expected_commit() {
     // A fresh store fetches the whole history.
     let fresh_dir = tempfile::tempdir().unwrap();
     let fresh = Arc::new(packstore::Store::open(fresh_dir.path()).unwrap());
-    let fetched = dstore::fetch(&cl, &fresh, key(b.id())).await.unwrap();
-    assert!(fetched > 0);
+    let fetched = dstore::fetch(&cl, &fresh, key(b.id()), None).await.unwrap();
+    assert!(fetched.objects > 0 && fetched.bytes > 0);
     let all = fstree::reachable_keys(key(b.id()), |k| store.get(k)).unwrap();
     assert!(fresh.missing(&all).unwrap().is_empty());
     assert!(all.contains(&key(a.id())));
@@ -160,7 +160,7 @@ async fn fetch_into(
     let (branches, _) = dstore::list_branches(cl, prefix).await.unwrap();
     let mut fetched = BTreeMap::new();
     for b in branches {
-        dstore::fetch(cl, &store, b.key).await.unwrap();
+        dstore::fetch(cl, &store, b.key, None).await.unwrap();
         fetched.insert(RefNameBuf::from(b.bookmark.as_str()), CommitId::new(b.key.as_bytes().to_vec()));
     }
     let mut tx = repo.start_transaction();
@@ -186,7 +186,7 @@ async fn push_from(
         let name = format!("{prefix}{}", u.name.as_str());
         let before = u.diff.before.as_ref().map(key);
         let r = match &u.diff.after {
-            Some(a) => dstore::put_branch(cl, &store, &name, key(a), before, "t").await.map(|_| ()),
+            Some(a) => dstore::put_branch(cl, &store, &name, key(a), before, "t", None).await.map(|_| ()),
             None => dstore::delete_branch(cl, &name, before.unwrap()).await,
         };
         match r {
@@ -281,13 +281,13 @@ async fn fetch_abandons_what_the_remote_dropped() {
 
     let (ann, a) = commit_on(ann, None, "a").await;
     let (ann, x) = commit_on(ann, Some(a.id()), "x").await;
-    dstore::put_branch(&cl, &store, "q/topic", key(x.id()), None, "ann").await.unwrap();
+    dstore::put_branch(&cl, &store, "q/topic", key(x.id()), None, "ann", None).await.unwrap();
     let (bob, _) = fetch_into(bob, &cl, "q/").await;
     assert!(bob.view().heads().contains(x.id()));
 
     // The topic is rewritten upstream: x is replaced by a sibling.
     let (_, y) = commit_on(ann, Some(a.id()), "y").await;
-    dstore::put_branch(&cl, &store, "q/topic", key(y.id()), Some(key(x.id())), "ann").await.unwrap();
+    dstore::put_branch(&cl, &store, "q/topic", key(y.id()), Some(key(x.id())), "ann", None).await.unwrap();
     let (bob, stats) = fetch_into(bob, &cl, "q/").await;
     assert_eq!(stats.abandoned, vec![x.id().clone()]);
     assert!(!bob.view().heads().contains(x.id()));

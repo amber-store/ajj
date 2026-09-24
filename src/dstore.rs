@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use amber_store_core::key::{Key, Type};
 use amber_store_core::packstore;
-use dstore_client::{Cluster, Cond, Config as ClientConfig, Ctx, Logger, PullStats};
+use dstore_client::{Cluster, Cond, Config as ClientConfig, Ctx, Logger, Progress, PullStats};
 use dstore_gocompat::slog::{Attr, Handler, Level, Record};
 use dstore_transport::Endpoint;
 use dstore_transport_iroh::{IrohConfig, IrohEndpoint, bind_iroh, generate_secret_key, relay_mode_of};
@@ -233,17 +233,36 @@ pub async fn list_branches(cl: &Cluster, prefix: &str) -> Result<(Vec<RemoteRef>
     Ok((branches, other))
 }
 
+/// Objects moved by a transfer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Moved {
+    pub objects: i64,
+    pub bytes: i64,
+}
+
+impl std::ops::AddAssign for Moved {
+    fn add_assign(&mut self, o: Moved) {
+        self.objects += o.objects;
+        self.bytes += o.bytes;
+    }
+}
+
 /// Copies the closure of `key` (for a commit: its trees and its whole history) into `local`.
-/// Subtrees already complete locally are not fetched again. Returns the number of objects fetched.
-pub async fn fetch(cl: &Cluster, local: &Arc<packstore::Store>, key: Key) -> Result<i64, Error> {
+/// Subtrees already complete locally are not fetched again. Returns what was fetched.
+pub async fn fetch(
+    cl: &Cluster,
+    local: &Arc<packstore::Store>,
+    key: Key,
+    prog: Option<Progress>,
+) -> Result<Moved, Error> {
     let ctx = Ctx::background();
     let mut st = PullStats::default();
-    cl.pull_tree(&ctx, Arc::clone(local), key, &mut st, None).await?;
-    Ok(st.fetched)
+    cl.pull_tree(&ctx, Arc::clone(local), key, &mut st, prog).await?;
+    Ok(Moved { objects: st.fetched, bytes: st.bytes })
 }
 
 /// Uploads the closure of `key` and points the reference `name` at it, provided the reference still
-/// names `expected_old` (`None`: the reference must not exist). Returns the objects uploaded.
+/// names `expected_old` (`None`: the reference must not exist). Returns what was uploaded.
 pub async fn put_branch(
     cl: &Cluster,
     local: &Arc<packstore::Store>,
@@ -251,14 +270,15 @@ pub async fn put_branch(
     key: Key,
     expected_old: Option<Key>,
     user: &str,
-) -> Result<i64, Error> {
+    prog: Option<Progress>,
+) -> Result<Moved, Error> {
     let ctx = Ctx::background();
     let cond = keyed(expected_old);
-    match cl.push(&ctx, Arc::clone(local), key, name, user, cond, None).await {
-        Ok(ps) => Ok(ps.uploaded),
+    match cl.push(&ctx, Arc::clone(local), key, name, user, cond, prog).await {
+        Ok(ps) => Ok(Moved { objects: ps.uploaded, bytes: ps.bytes }),
         Err(e) => match e.cas_mismatch() {
             // The reference already names our commit: an earlier push got this far.
-            Some(cm) if cm.has_current && cm.current == key.as_bytes() => Ok(0),
+            Some(cm) if cm.has_current && cm.current == key.as_bytes() => Ok(Moved::default()),
             Some(cm) => Err(Error::Changed { name: name.to_owned(), current: describe_current(cm) }),
             None => Err(e.into()),
         },
