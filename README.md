@@ -23,6 +23,13 @@ Because the objects are amber's own, dstore's working copies share the same bran
 `dstore clone myrepo/main` checks out a jj-made commit, and a `dstore push -m …` on it is a commit
 that `ajj dstore fetch` imports.
 
+## Forge frontend preview
+
+A responsive web frontend design lives in [`web/`](web/README.md). Run
+`npm --prefix web start` and open <http://localhost:3000>. It includes source browsing,
+change reviews, bookmarks, and activity, using a repository snapshot and labeled sample
+history. It does not connect to a live dstore cluster.
+
 ## Commands
 
 | Command | What it does |
