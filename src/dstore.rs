@@ -36,7 +36,7 @@ pub enum Error {
 /// One configured dstore remote.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Remote {
-    /// A `dstore1…` ticket, or node ids.
+    /// A `dstore1…` ticket, or node ids; empty to take `$DSTORE_TICKET` at each use.
     pub ticket: String,
     /// Prepended to a bookmark name to form the reference name, e.g. `myrepo/`.
     #[serde(default)]
@@ -59,9 +59,30 @@ impl Remote {
         format!("{}{}", self.prefix, bookmark)
     }
 
-    /// Checks the ticket and that the prefix makes valid reference names.
+    /// The remote as one run uses it: `ticket` given for the run, else the stored ticket, else
+    /// `$DSTORE_TICKET` (dstore's working copies resolve theirs in the same order).
+    pub fn for_run(&self, ticket: Option<&str>) -> Result<Remote, Error> {
+        let env = std::env::var("DSTORE_TICKET").unwrap_or_default();
+        let ticket = match ticket {
+            Some(t) => t.to_owned(),
+            None if !self.ticket.is_empty() => self.ticket.clone(),
+            None if !env.is_empty() => env,
+            None => {
+                return Err(Error::Msg(
+                    "no ticket: the remote stores none; pass --ticket or set DSTORE_TICKET".into(),
+                ));
+            }
+        };
+        let r = Remote { ticket, ..self.clone() };
+        r.validate()?;
+        Ok(r)
+    }
+
+    /// Checks the ticket, when one is stored, and that the prefix makes valid reference names.
     pub fn validate(&self) -> Result<(), Error> {
-        dstore_ticket::parse(self.ticket.as_bytes()).map_err(|e| Error::Msg(e.to_string()))?;
+        if !self.ticket.is_empty() {
+            dstore_ticket::parse(self.ticket.as_bytes()).map_err(|e| Error::Msg(e.to_string()))?;
+        }
         if !self.prefix.is_empty() {
             dstore_client::validate_name_bytes(self.ref_name("x").as_bytes())
                 .map_err(|e| Error::Msg(format!("prefix {:?}: {e}", self.prefix)))?;
@@ -265,4 +286,33 @@ pub fn ref_user(name: &str, email: &str) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T1: &str = "5b7f9fd5b7d899a67bdf2acb82a52d164593cb836f5a3b7546899bf5f3334c27";
+    const T2: &str = "6c8fa0e6c8e9aab78ce03bdc93b63e275604dc947c4b86578a9aac06a4445d38";
+
+    #[test]
+    fn a_run_ticket_overrides_the_stored_one() {
+        let stored = Remote { ticket: T1.into(), prefix: "p/".into(), ..Remote::default() };
+        assert_eq!(stored.for_run(None).unwrap().ticket, T1);
+        let run = stored.for_run(Some(T2)).unwrap();
+        assert_eq!(run.ticket, T2);
+        assert_eq!(run.prefix, "p/");
+        assert!(stored.for_run(Some("not a ticket")).is_err());
+    }
+
+    #[test]
+    fn a_remote_may_store_no_ticket() {
+        let r = Remote { prefix: "p/".into(), ..Remote::default() };
+        r.validate().unwrap();
+        assert_eq!(r.for_run(Some(T1)).unwrap().ticket, T1);
+        let json =
+            serde_json::to_string(&Remotes { remotes: [("origin".into(), r.clone())].into() }).unwrap();
+        let back: Remotes = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.remotes["origin"], r);
+    }
 }

@@ -81,6 +81,7 @@ struct InitArgs {
 #[derive(clap::Args, Clone, Debug)]
 struct CloneArgs {
     /// Ticket of the dstore cluster (`dstore1…`, or node ids)
+    #[arg(long, env = "DSTORE_TICKET", hide_env_values = true)]
     ticket: String,
     /// The destination directory
     #[arg(value_hint = clap::ValueHint::DirPath)]
@@ -104,6 +105,9 @@ struct FetchArgs {
     /// Leave new remote bookmarks untracked
     #[arg(long)]
     no_track: bool,
+    /// Ticket for this run, overriding the stored one and `$DSTORE_TICKET`
+    #[arg(long)]
+    ticket: Option<String>,
 }
 
 /// Push bookmarks to a dstore remote
@@ -127,15 +131,22 @@ struct PushArgs {
     /// Only print what would be pushed
     #[arg(long)]
     dry_run: bool,
+    /// Ticket for this run, overriding the stored one and `$DSTORE_TICKET`
+    #[arg(long)]
+    ticket: Option<String>,
 }
 
 /// Manage dstore remotes
 #[derive(clap::Subcommand, Clone, Debug)]
 enum RemoteCommand {
     /// Add a remote
+    ///
+    /// Without a ticket (neither `--ticket` nor `$DSTORE_TICKET`), none is stored, and fetch and push
+    /// take `$DSTORE_TICKET` when they run.
     Add {
         name: RemoteNameBuf,
-        /// Ticket of the dstore cluster
+        /// Ticket of the dstore cluster (`dstore1…`, or node ids)
+        #[arg(long, env = "DSTORE_TICKET", hide_env_values = true, default_value = "")]
         ticket: String,
         #[command(flatten)]
         net: NetArgs,
@@ -206,7 +217,7 @@ fn pick_remote(
         None if remotes.remotes.len() == 1 => remotes.remotes.keys().next().unwrap().as_str().into(),
         None if remotes.remotes.is_empty() => {
             return Err(user_error("No dstore remote is configured")
-                .hinted("Add one with `ajj dstore remote add origin <ticket> --prefix <repo>/`."));
+                .hinted("Add one with `ajj dstore remote add origin --ticket <ticket> --prefix <repo>/`."));
         }
         None => return Err(user_error("Several dstore remotes are configured; pick one with --remote")),
     };
@@ -315,6 +326,7 @@ async fn cmd_fetch(ui: &mut Ui, command: &CommandHelper, args: &FetchArgs) -> Re
     let mut ws = command.workspace_helper(ui).await?;
     let remotes = Remotes::load(backend(&ws)?.path()).map_err(user_error)?;
     let (name, remote) = pick_remote(&remotes, args.remote.as_deref())?;
+    let remote = remote.for_run(args.ticket.as_deref()).map_err(user_error)?;
     fetch_remote(ui, &mut ws, &name, &remote, !args.no_track).await
 }
 
@@ -383,6 +395,7 @@ async fn cmd_push(ui: &mut Ui, command: &CommandHelper, args: &PushArgs) -> Resu
     let mut ws = command.workspace_helper(ui).await?;
     let remotes = Remotes::load(backend(&ws)?.path()).map_err(user_error)?;
     let (remote_name, remote) = pick_remote(&remotes, args.remote.as_deref())?;
+    let remote = remote.for_run(args.ticket.as_deref()).map_err(user_error)?;
     let store = Arc::clone(backend(&ws)?.store());
 
     let sel = PushSelection { names: args.bookmarks.clone(), all: args.all, deleted: args.deleted };
@@ -515,7 +528,8 @@ async fn cmd_remote(ui: &mut Ui, command: &CommandHelper, cmd: RemoteCommand) ->
             for (name, r) in &remotes.remotes {
                 let prefix =
                     if r.prefix.is_empty() { String::new() } else { format!(" prefix={}", r.prefix) };
-                writeln!(out, "{name} {}{prefix}", r.ticket)?;
+                let ticket = if r.ticket.is_empty() { "$DSTORE_TICKET" } else { &r.ticket };
+                writeln!(out, "{name} {ticket}{prefix}")?;
             }
         }
     }

@@ -64,7 +64,15 @@ mkdir sub && printf '#!/bin/sh\n' >sub/x.sh && chmod +x sub/x.sh
 ln -s a.txt link
 head -c 3000000 /dev/urandom >big.bin
 "$AJJ" commit -m first >/dev/null 2>&1
-"$AJJ" dstore remote add origin "$T" --prefix demo/ --no-relay
+# Ann's remote stores no ticket: fetch and push take $DSTORE_TICKET when they run.
+env -u DSTORE_TICKET "$AJJ" dstore remote add origin --prefix demo/ --no-relay
+if contains "$("$AJJ" dstore remote list)" 'origin $DSTORE_TICKET prefix=demo/'; then
+	pass "remote without a stored ticket"
+else fail "remote without a stored ticket"; fi
+if OUT=$(env -u DSTORE_TICKET "$AJJ" dstore fetch 2>&1); then fail "no ticket anywhere is an error"; else
+	if contains "$OUT" "no ticket"; then pass "no ticket anywhere is an error"; else fail "no ticket anywhere: $OUT"; fi
+fi
+check "--ticket for one run" env -u DSTORE_TICKET "$AJJ" dstore fetch --ticket "$T"
 "$AJJ" bookmark create main -r @- >/dev/null 2>&1
 check "push a new bookmark" "$AJJ" dstore push -b main
 MAIN=$("$AJJ" log --no-graph -r main -T commit_id 2>/dev/null)
@@ -74,7 +82,7 @@ if contains "$REF" "$MAIN"; then pass "demo/main names the jj commit"; else fail
 # 2. Bob clones with ajj: same files, same commit, same change id.
 as Bob
 cd "$W"
-check "clone" "$AJJ" dstore clone "$T" bob --prefix demo/ --no-relay
+check "clone with the ticket from \$DSTORE_TICKET" "$AJJ" dstore clone bob --prefix demo/ --no-relay
 if cmp -s ann/big.bin bob/big.bin && [ "$(readlink bob/link)" = a.txt ] && [ -x bob/sub/x.sh ]; then
 	pass "cloned files, symlink, exec bit"
 else fail "cloned files, symlink, exec bit"; fi
@@ -87,6 +95,9 @@ check "go clone of the jj branch" "$G" clone --no-relay demo/main wc
 if cmp -s ann/big.bin wc/big.bin; then pass "go working copy has the files"; else fail "go working copy has the files"; fi
 echo "from go" >wc/go.txt
 check "go push on the branch" bash -c "cd wc && '$G' push --no-relay -m 'go commit'"
+
+# Bob's clone stored the ticket; fetch needs no environment.
+check "stored ticket from clone" bash -c "cd '$W/bob' && env -u DSTORE_TICKET '$AJJ' dstore fetch"
 
 # 4. Bob fetches Go's commit, commits on top, pushes by default (main is tracked); Go pulls it.
 cd "$W/bob"

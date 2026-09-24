@@ -11,7 +11,8 @@ Everything else is jj 0.45.1, unchanged: `ajj log`, `ajj new`, `ajj rebase`, `aj
 `ajj op log` and so on.
 
 ```sh
-ajj dstore clone dstore1… myrepo --prefix myrepo/   # fetch every branch under myrepo/, check out main
+export DSTORE_TICKET=dstore1…                        # or --ticket, as for dstore
+ajj dstore clone myrepo --prefix myrepo/            # fetch every branch under myrepo/, check out main
 cd myrepo
 echo hi > hello.txt && ajj commit -m hello
 ajj bookmark move main --to @-
@@ -27,14 +28,21 @@ that `ajj dstore fetch` imports.
 | Command | What it does |
 | --- | --- |
 | `ajj dstore init [DIR]` | Create a repository with the amber backend. |
-| `ajj dstore clone TICKET DIR [--prefix P] [--remote origin] [-b BRANCH]` | Create a repository and add the remote. Fetch its branches, tracking them, then check out `main`, `master` or `trunk` (or `-b`). |
-| `ajj dstore remote add NAME TICKET [--prefix P]` | Add a remote. |
+| `ajj dstore clone DIR [--ticket T] [--prefix P] [--remote origin] [-b BRANCH]` | Create a repository and add the remote. Fetch its branches, tracking them, then check out `main`, `master` or `trunk` (or `-b`). |
+| `ajj dstore remote add NAME [--ticket T] [--prefix P]` | Add a remote. |
 | `ajj dstore remote remove NAME`, `ajj dstore remote list` | Remove or list remotes. |
-| `ajj dstore fetch [--remote R] [--no-track]` | Fetch the remote's branches and update the remote bookmarks. |
-| `ajj dstore push [--remote R] [-b NAME]… [--all] [--deleted] [--dry-run]` | Move references to where the local bookmarks point. |
+| `ajj dstore fetch [--remote R] [--no-track] [--ticket T]` | Fetch the remote's branches and update the remote bookmarks. |
+| `ajj dstore push [--remote R] [-b NAME]… [--all] [--deleted] [--dry-run] [--ticket T]` | Move references to where the local bookmarks point. |
 
 The network flags `--relay URL`, `--no-relay` and `--no-discovery` are stored with the remote and
 mean what they mean to `dstore`. The remotes are kept in `.jj/repo/store/amber/remotes.json`.
+
+**Tickets** are resolved the way dstore's working copies resolve them:
+- `clone` and `remote add` take `--ticket`, or `$DSTORE_TICKET` when the flag is absent, and store
+  it with the remote.
+- A remote added with neither stores no ticket.
+- `fetch` and `push` use, in order, `--ticket` for that run, the stored ticket, or
+  `$DSTORE_TICKET`.
 
 **Fetch** does what `jj git fetch` does, on the references under the remote's prefix:
 - Each reference naming a commit is a branch. The closure of each branch (the commit, its trees,
