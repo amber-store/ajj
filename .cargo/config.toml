@@ -1,0 +1,3 @@
+[net]
+# Fetch git dependencies with the git CLI, so ssh agents and url.insteadOf rules apply.
+git-fetch-with-cli = true

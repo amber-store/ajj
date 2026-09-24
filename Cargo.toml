@@ -1,0 +1,52 @@
+[package]
+name = "ajj"
+description = "jj (Jujutsu) with a backend that stores commits in amber-store and syncs bookmarks with dstore references"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "LGPL-3.0-only"
+repository = "https://github.com/amber-store/ajj"
+
+[lib]
+name = "ajj"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ajj"
+path = "src/main.rs"
+
+[dependencies]
+# jj 0.45.1: the API is unstable between releases, so both crates are pinned exactly.
+jj-cli = { version = "=0.45.1", default-features = false }
+jj-lib = { version = "=0.45.1", default-features = false }
+
+# core-rs v0.7.0 (core v0.0.10: jj commit fields, footprint length). Same rev as dstore-client-rs, so
+# `Key` and `packstore::Store` are the same types on both sides.
+amber-store-core = { git = "https://github.com/amber-store/core-rs", rev = "1a8bca1079e85713052b99c9bde144625015652c" }
+
+# dstore-client-rs v0.2.0 (dstore v0.1.11).
+dstore-client = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+dstore-gocompat = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+dstore-ticket = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+dstore-transport = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+dstore-transport-iroh = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+
+async-trait = "0.1.89"
+blake3 = "1.8"
+clap = { version = "4.6", features = ["derive"] }
+futures = "0.3.32"
+hex = "0.4.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[dev-dependencies]
+dstore-testkit = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
+pollster = "1.0"
+tempfile = "3.27"
+
+# dstore-client-rs patches iroh 1.2.0 for go-iroh interop (its third_party/README.md). A [patch] does
+# not reach dependents, so ajj repeats it, taking the patched crate from the same revision.
+[patch.crates-io]
+iroh = { git = "https://github.com/amber-store/dstore-client-rs", rev = "0617bd9" }
