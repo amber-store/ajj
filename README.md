@@ -121,6 +121,11 @@ Every reader derives the same value. Nanoseconds that are not whole milliseconds
   objects live as long as a reference reaches them.
 - There are no tags, and nothing is colocated with git (jj's `git` feature is off).
 
+## Installing
+
+Each [release](https://github.com/amber-store/ajj/releases) has `ajj` binaries for Linux (static,
+x86-64 and arm64) and macOS (arm64 and x86-64), with `SHA256SUMS`. Or build it:
+
 ## Building and testing
 
 The Nix flake's dev shell has the toolchain (Rust 1.95, Go for the end-to-end test):

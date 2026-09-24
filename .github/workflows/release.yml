@@ -1,0 +1,178 @@
+name: release
+
+# A pushed tag v* builds ajj for Linux (static, musl) and macOS, smoke-tests each binary and creates a
+# draft GitHub release with the tarballs and SHA256SUMS; the notes are written before the draft is
+# published. A pull request that changes this workflow, or a manual run, is a dry run: it builds and
+# tests every target and releases nothing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.95.0" # = ci.yml
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: version
+        name: Resolve the version (the tag, or the crate's version on a dry run)
+        run: |
+          crate=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            VERSION=$GITHUB_REF_NAME
+            if [ "$VERSION" != "v$crate" ]; then
+              echo "::error::tag $VERSION does not match the version $crate in Cargo.toml"
+              exit 1
+            fi
+          else
+            VERSION=v$crate
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            arch: x86-64 # as `file` prints it
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            arch: ARM aarch64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            arch: arm64
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: musl C toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          # ring, zstd-sys, blake3 and SQLite compile C through cc-rs; musl-gcc serves both architectures.
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: cargo build
+        run: cargo build --release --locked --bin ajj --target "$TARGET"
+      - name: Smoke test
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          bin="$PWD/target/$TARGET/release/ajj"
+          kind=$(file -b "$bin")
+          echo "$kind"
+          case "$kind" in
+            *"$ARCH"*) ;;
+            *) echo "::error::$bin is not a $ARCH binary"; exit 1 ;;
+          esac
+          if [ "$RUNNER_OS" = Linux ]; then
+            case "$kind" in
+              *"static-pie linked"* | *"statically linked"*) ;;
+              *) echo "::error::$bin is not statically linked"; exit 1 ;;
+            esac
+          else
+            otool -L "$bin"
+            if otool -L "$bin" | tail -n +2 | grep -v -E '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
+              echo "::error::$bin links libraries outside /usr/lib and /System/Library"
+              exit 1
+            fi
+          fi
+          got=$("$bin" --version)
+          echo "$got"
+          if [ "$got" != "ajj ${VERSION#v}" ]; then
+            echo "::error::ajj --version must print \"ajj ${VERSION#v}\""
+            exit 1
+          fi
+          # A repository with the amber backend: init, commit, log.
+          export JJ_CONFIG=/dev/null JJ_USER=ci JJ_EMAIL=ci@example.com
+          cd "$RUNNER_TEMP"
+          "$bin" dstore init smoke
+          cd smoke
+          echo hello > hello.txt
+          "$bin" commit -m smoke
+          "$bin" log --no-pager
+          test "$(cat .jj/repo/store/type)" = amber
+          "$bin" file show -r @- hello.txt | grep -qx hello
+      - name: Package
+        run: |
+          name="ajj-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/ajj" LICENSE COPYING README.md "dist/$name/"
+          COPYFILE_DISABLE=1 tar -C dist --no-xattrs -czf "dist/$name.tar.gz" "$name"
+          tar -tvzf "dist/$name.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ajj-${{ env.VERSION }}-${{ matrix.target }}
+          path: dist/ajj-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    # Tag pushes only.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ajj-*
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum ajj-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      # No body: the notes are written on the draft, and a re-run keeps them.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/ajj-*.tar.gz
+            dist/SHA256SUMS
